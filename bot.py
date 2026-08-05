@@ -59,7 +59,7 @@ class StreakInfoView(discord.ui.View):
         explanation = (
             "فكرة الستريك\n"
             f"لازم ترسل {MESSAGES_REQUIRED} رسائل يوميا بالشات العام ليحسب لك ستريك\n"
-            "اذا ما ارسلت 5 رسائل الستريك بينقطع وبيروح منك"
+            "اذا ما ارسلت 5 رسائل في يوم الستريك بينقطع وبيروح منك"
         )
         await interaction.response.send_message(explanation, ephemeral=True)
 
@@ -82,7 +82,7 @@ async def on_message(message):
                 save_data(data)
 
                 await message.channel.send(
-                    f"مبروك يا اسطورة {message.author.mention} , وصلت الستريك \"{user['streak']}\" 🔥",
+                    f"مبروك يا اسطورة {message.author.mention} , وصلت الستريك {user['streak']} <a:b_NE20:1513171162157416609>",
                     view=StreakInfoView(),
                 )
             else:
