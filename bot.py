@@ -345,6 +345,9 @@ async def daily_reset_check():
 @bot.event
 async def on_ready():
     print(f"✅ البوت شغال باسم {bot.user}")
+    await bot.change_presence(
+        activity=discord.Activity(type=discord.ActivityType.playing, name="programed by mist")
+    )
     bot.add_view(StreakInfoView())  # يخلي الزر شغال بعد أي ريستارت
     if not daily_reset_check.is_running():
         daily_reset_check.start()
