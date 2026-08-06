@@ -49,10 +49,12 @@ def get_user(user_id):
             "achieved_today": False,
             "reminded_today": False,
             "locked_today": False,
+            "enabled": True,
         }
     # لو مستخدم قديم ما فيه الحقول الجديدة، نضيفها
     data[uid].setdefault("reminded_today", False)
     data[uid].setdefault("locked_today", False)
+    data[uid].setdefault("enabled", True)
     return data[uid]
 
 
@@ -79,6 +81,10 @@ class StreakInfoView(discord.ui.View):
 @bot.command(name="streak")
 async def streak_cmd(ctx, member: discord.Member = None):
     target = member or ctx.author
+
+    if target.bot:
+        return
+
     user = get_user(target.id)
 
     embed = discord.Embed(
@@ -101,6 +107,30 @@ async def streak_cmd_error(ctx, error):
         await ctx.send("ما لقيت هيك عضو، تأكد من المنشن أو الاسم.")
     else:
         raise error
+
+
+# ---------------- أمر: تفعيل الستريك للشخص نفسه ----------------
+@bot.command(name="enablestreak")
+async def enable_streak_cmd(ctx):
+    user = get_user(ctx.author.id)
+    if user["enabled"]:
+        await ctx.send("الستريك مفعل عندك أصلاً.")
+        return
+    user["enabled"] = True
+    save_data(data)
+    await ctx.send("تم تفعيل الستريك عندك، رسائلك بالشات العام رح تحسب من هلق.")
+
+
+# ---------------- أمر: إلغاء الستريك للشخص نفسه ----------------
+@bot.command(name="disablestreak")
+async def disable_streak_cmd(ctx):
+    user = get_user(ctx.author.id)
+    if not user["enabled"]:
+        await ctx.send("الستريك ملغي عندك أصلاً.")
+        return
+    user["enabled"] = False
+    save_data(data)
+    await ctx.send("تم إلغاء الستريك عندك، رسائلك بالشات العام ما رح تحسب لحد ما تفعله مرة ثانية.")
 
 
 # ---------------- أمر: أعلى 10 بالستريك ----------------
@@ -206,7 +236,7 @@ async def on_message(message):
     if message.channel.id == GENERAL_CHANNEL_ID:
         user = get_user(message.author.id)
 
-        if not user["achieved_today"] and not user.get("locked_today", False):
+        if user.get("enabled", True) and not user["achieved_today"] and not user.get("locked_today", False):
             user["messages_today"] += 1
 
             if user["messages_today"] >= MESSAGES_REQUIRED:
