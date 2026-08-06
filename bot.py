@@ -67,13 +67,32 @@ class StreakInfoView(discord.ui.View):
     async def streak_info(self, interaction: discord.Interaction, button: discord.ui.Button):
         explanation = (
             "فكرة الستريك\n"
-            f"يجب ارسال {MESSAGES_REQUIRED} رسائل يومياً بالشات العام ليحتسب لك ستريك\n"
-            "اذا لم تقم ب ارسال الرسائل المطلوبة الستريك بينقطع وبيرجع صفر"
+            f"لازم ترسل {MESSAGES_REQUIRED} رسائل يوميا بالشات العام ليحسب لك ستريك\n"
+            "اذا ما ارسلت الرسائل المطلوبة بيوم الستريك بينقطع وبيروح منك"
         )
         await interaction.response.send_message(explanation, ephemeral=True)
 
 
-# ---------------- زر تأكيد إلغاء ستريك شخص ----------------
+# ---------------- أمر: عرض الستريك الشخصي ----------------
+@bot.command(name="streak")
+async def streak_cmd(ctx):
+    user = get_user(ctx.author.id)
+
+    embed = discord.Embed(
+        title=f"ستريك {ctx.author.display_name}",
+        color=discord.Color.orange(),
+    )
+    embed.add_field(name="🔥 الستريك الحالي", value=str(user["streak"]), inline=True)
+    embed.add_field(
+        name="📨 رسائل اليوم",
+        value=f"{user['messages_today']} / {MESSAGES_REQUIRED}",
+        inline=True,
+    )
+
+    await ctx.send(embed=embed)
+
+
+# ---------------- زر تأكيد تصفير ستريك شخص ----------------
 class ConfirmResetView(discord.ui.View):
     def __init__(self, target_id: int, requester_id: int):
         super().__init__(timeout=60)
@@ -81,13 +100,12 @@ class ConfirmResetView(discord.ui.View):
         self.requester_id = requester_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # بس اللي طلب الأمر يقدر يضغط الأزرار
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message("هاد الزر مو إلك.", ephemeral=True)
             return False
         return True
 
-    @discord.ui.button(label="تأكيد الإلغاء", style=discord.ButtonStyle.danger, emoji="✅")
+    @discord.ui.button(style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(self.target_id)
         data[uid] = {
@@ -100,51 +118,25 @@ class ConfirmResetView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(
-            content=f"✅ تم إلغاء وتصفير ستريك <@{self.target_id}>.", view=self
+            content=f"تم تصفير الستريك الخاص بـ <@{self.target_id}>", view=self
         )
         self.stop()
 
-    @discord.ui.button(label="إلغاء", style=discord.ButtonStyle.secondary, emoji="✖️")
+    @discord.ui.button(style=discord.ButtonStyle.danger, emoji="❌")
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content="❌ تم إلغاء العملية، ما تغير شي.", view=self)
+        await interaction.response.edit_message(content="تم إلغاء العملية", view=self)
         self.stop()
 
 
-# ---------------- أمر: عرض الستريك الشخصي ----------------
-@bot.command(name="streak")
-async def streak_cmd(ctx):
-    user = get_user(ctx.author.id)
-    remaining = max(0, MESSAGES_REQUIRED - user["messages_today"])
-
-    if user["achieved_today"]:
-        status = "✅ خلصت شرط اليوم، الستريك محفوظ."
-    else:
-        status = f"❌ باقي لك {remaining} رسالة ليحتسب لك ستريك اليوم."
-
-    embed = discord.Embed(
-        title=f"ستريك {ctx.author.display_name}",
-        color=discord.Color.orange(),
-    )
-    embed.add_field(name=" الستريك الحالي", value=str(user["streak"]), inline=True)
-    embed.add_field(
-        name="📨 رسائل اليوم",
-        value=f"{user['messages_today']} / {MESSAGES_REQUIRED}",
-        inline=True,
-    )
-    embed.add_field(name="الحالة", value=status, inline=False)
-
-    await ctx.send(embed=embed)
-
-
-# ---------------- أمر إداري: إلغاء/تصفير ستريك شخص ----------------
+# ---------------- أمر إداري: تصفير ستريك شخص ----------------
 @bot.command(name="resetstreak")
 @commands.has_permissions(administrator=True)
 async def reset_streak_cmd(ctx, member: discord.Member):
     view = ConfirmResetView(target_id=member.id, requester_id=ctx.author.id)
     await ctx.send(
-        f"⚠️ متأكد إنك بدك تلغي وتصفر ستريك {member.mention}؟",
+        f"هل تريد التأكيد على تصفير الستريك الخاص بـ {member.mention}",
         view=view,
     )
 
@@ -152,11 +144,11 @@ async def reset_streak_cmd(ctx, member: discord.Member):
 @reset_streak_cmd.error
 async def reset_streak_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ هاذا الامر خاص للاداريين فقط.")
+        await ctx.send("هاد الأمر للإداريين بس.")
     elif isinstance(error, commands.MemberNotFound):
-        await ctx.send("❌ لم اعثر على هاذا العضو تأكد من اليوزر او الاسم.")
+        await ctx.send("ما لقيت هيك عضو، تأكد من المنشن أو الاسم.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("طريقة الاستخدام: `!resetstreak @الشخص`")
+        await ctx.send("استخدم الأمر هيك: `!resetstreak @الشخص`")
     else:
         raise error
 
