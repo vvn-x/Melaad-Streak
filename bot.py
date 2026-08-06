@@ -94,6 +94,31 @@ async def streak_cmd(ctx):
     await ctx.send(embed=embed)
 
 
+# ---------------- أمر: أعلى 10 بالستريك ----------------
+@bot.command(name="top")
+async def top_cmd(ctx):
+    sorted_users = sorted(data.items(), key=lambda item: item[1]["streak"], reverse=True)
+    sorted_users = [u for u in sorted_users if u[1]["streak"] > 0][:10]
+
+    if not sorted_users:
+        await ctx.send("ما في حد عنده ستريك لسا.")
+        return
+
+    lines = []
+    for i, (uid, user) in enumerate(sorted_users, start=1):
+        member = ctx.guild.get_member(int(uid))
+        name = member.display_name if member else f"مستخدم غير موجود ({uid})"
+        lines.append(f"{i}. {name} - {user['streak']}")
+
+    embed = discord.Embed(
+        title="أعلى 10 بالستريك",
+        description="\n".join(lines),
+        color=discord.Color.orange(),
+    )
+
+    await ctx.send(embed=embed)
+
+
 # ---------------- زر تأكيد تصفير ستريك شخص ----------------
 class ConfirmResetView(discord.ui.View):
     def __init__(self, target_id: int, requester_id: int):
