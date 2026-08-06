@@ -101,20 +101,27 @@ async def top_cmd(ctx):
     sorted_users = [u for u in sorted_users if u[1]["streak"] > 0][:10]
 
     if not sorted_users:
-        await ctx.send("ما في حد عنده ستريك لسا.")
+        embed = discord.Embed(
+            title="أعلى 10 بالستريك",
+            description="ما في حد عنده ستريك لسا.",
+            color=discord.Color.orange(),
+        )
+        await ctx.send(embed=embed)
         return
 
     lines = []
-    for i, (uid, user) in enumerate(sorted_users, start=1):
+    for uid, user in sorted_users:
         member = ctx.guild.get_member(int(uid))
         name = member.display_name if member else f"مستخدم غير موجود ({uid})"
-        lines.append(f"{i}. {name} - {user['streak']}")
+        lines.append(f"\u200E• {name}")
 
     embed = discord.Embed(
         title="أعلى 10 بالستريك",
         description="\n".join(lines),
         color=discord.Color.orange(),
     )
+    if ctx.guild.icon:
+        embed.set_thumbnail(url=ctx.guild.icon.url)
 
     await ctx.send(embed=embed)
 
