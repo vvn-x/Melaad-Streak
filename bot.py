@@ -107,12 +107,19 @@ async def streak_cmd(ctx, member: discord.Member = None):
         title=f"ستريك {target.display_name}",
         color=discord.Color.orange(),
     )
+    embed.set_thumbnail(url=target.display_avatar.url)
     embed.add_field(name="\u200E<a:j16:1534842771373035560> الستريك الحالي", value=str(user["streak"]), inline=True)
+    embed.add_field(name="\u200E", value="\u200E", inline=True)
     embed.add_field(
         name="<a:008Cinnamoroll_Excited:1525769555052335155> رسائل اليوم",
         value=f"{user['messages_today']} / {MESSAGES_REQUIRED}",
         inline=True,
     )
+    if ctx.guild.icon:
+        embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url)
+    else:
+        embed.set_footer(text=ctx.guild.name)
+    embed.timestamp = datetime.now(TIMEZONE)
 
     await ctx.send(embed=embed)
 
