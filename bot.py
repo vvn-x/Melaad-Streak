@@ -10,7 +10,9 @@ from zoneinfo import ZoneInfo
 # لو بدك تشغل الكود محليًا بدون Railway، بتقدر تحط القيم مباشرة بدل os.environ.get(...)
 TOKEN = os.environ.get("DISCORD_TOKEN")                              # توكن البوت
 GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "0"))  # آيدي الروم العام
-MESSAGES_REQUIRED = int(os.environ.get("MESSAGES_REQUIRED", "10"))   # عدد الرسائل المطلوب باليوم
+MESSAGES_REQUIRED = int(os.environ.get("MESSAGES_REQUIRED", "10"))   # عدد الرسائل المطلوب بالروم العام
+SECOND_CHANNEL_ID = int(os.environ.get("SECOND_CHANNEL_ID", "1511761353386365091"))  # آيدي الروم الثاني
+SECOND_CHANNEL_MESSAGES_REQUIRED = int(os.environ.get("SECOND_CHANNEL_MESSAGES_REQUIRED", "5"))  # عدد الرسائل المطلوب بالروم الثاني
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Amman"))        # المنطقة الزمنية
 RESET_HOUR = int(os.environ.get("RESET_HOUR", "0"))                  # ساعة تصفير الستريك اليومي (0-23)، 0 = 12 بالليل
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", str((RESET_HOUR - 1) % 24)))  # ساعة إرسال التذكير (افتراضيا قبل التصفير بساعة)
@@ -46,6 +48,7 @@ def get_user(user_id):
         data[uid] = {
             "streak": 0,
             "messages_today": 0,
+            "messages_today_channel2": 0,
             "achieved_today": False,
             "reminded_today": False,
             "locked_today": False,
@@ -55,6 +58,7 @@ def get_user(user_id):
     data[uid].setdefault("reminded_today", False)
     data[uid].setdefault("locked_today", False)
     data[uid].setdefault("enabled", True)
+    data[uid].setdefault("messages_today_channel2", 0)
     return data[uid]
 
 
@@ -233,13 +237,22 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    if message.channel.id == GENERAL_CHANNEL_ID:
+    if message.channel.id in (GENERAL_CHANNEL_ID, SECOND_CHANNEL_ID):
         user = get_user(message.author.id)
 
         if user.get("enabled", True) and not user["achieved_today"] and not user.get("locked_today", False):
-            user["messages_today"] += 1
+            achieved_now = False
 
-            if user["messages_today"] >= MESSAGES_REQUIRED:
+            if message.channel.id == GENERAL_CHANNEL_ID:
+                user["messages_today"] += 1
+                if user["messages_today"] >= MESSAGES_REQUIRED:
+                    achieved_now = True
+            else:  # SECOND_CHANNEL_ID
+                user["messages_today_channel2"] += 1
+                if user["messages_today_channel2"] >= SECOND_CHANNEL_MESSAGES_REQUIRED:
+                    achieved_now = True
+
+            if achieved_now:
                 user["achieved_today"] = True
                 user["streak"] += 1
                 save_data(data)
@@ -309,6 +322,7 @@ async def daily_reset_check():
                 if not user["achieved_today"]:
                     user["streak"] = 0
                 user["messages_today"] = 0
+                user["messages_today_channel2"] = 0
                 user["achieved_today"] = False
                 user["reminded_today"] = False
                 user["locked_today"] = False
