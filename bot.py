@@ -39,6 +39,22 @@ def save_data(data):
 
 data = load_data()
 
+# لمنع معالجة نفس الرسالة مرتين (بيصير أحيانًا بعد إعادة اتصال البوت بديسكورد)
+from collections import deque
+_processed_message_ids = deque(maxlen=5000)
+_processed_message_ids_set = set()
+
+
+def already_processed(message_id: int) -> bool:
+    if message_id in _processed_message_ids_set:
+        return True
+    if len(_processed_message_ids) == _processed_message_ids.maxlen:
+        oldest = _processed_message_ids[0]
+        _processed_message_ids_set.discard(oldest)
+    _processed_message_ids.append(message_id)
+    _processed_message_ids_set.add(message_id)
+    return False
+
 
 def get_user(user_id):
     uid = str(user_id)
@@ -231,6 +247,9 @@ async def reset_streak_error(ctx, error):
 @bot.event
 async def on_message(message):
     if message.author.bot:
+        return
+
+    if already_processed(message.id):
         return
 
     if message.channel.id == GENERAL_CHANNEL_ID:
