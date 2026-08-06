@@ -116,7 +116,7 @@ class StreakInfoView(discord.ui.View):
         await interaction.response.send_message(explanation, ephemeral=True)
 
     @discord.ui.button(
-        emoji="🔥",
+        emoji="📊",
         style=discord.ButtonStyle.secondary,
         custom_id="streak_view_button",
     )
