@@ -74,6 +74,29 @@ def get_user(user_id):
     return data[uid]
 
 
+def build_streak_embed(target, guild):
+    user = get_user(target.id)
+
+    embed = discord.Embed(
+        title=f"ستريك {target.display_name}",
+        color=discord.Color.orange(),
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="\u200E<a:j16:1534842771373035560> الستريك الحالي", value=str(user["streak"]), inline=True)
+    embed.add_field(name="\u200E", value="\u200E", inline=True)
+    embed.add_field(
+        name="<a:008Cinnamoroll_Excited:1525769555052335155> رسائل اليوم",
+        value=f"{user['messages_today']} / {MESSAGES_REQUIRED}",
+        inline=True,
+    )
+    if guild.icon:
+        embed.set_footer(text=guild.name, icon_url=guild.icon.url)
+    else:
+        embed.set_footer(text=guild.name)
+    embed.timestamp = datetime.now(TIMEZONE)
+    return embed
+
+
 # ---------------- زر شرح فكرة الستريك ----------------
 class StreakInfoView(discord.ui.View):
     def __init__(self):
@@ -92,44 +115,14 @@ class StreakInfoView(discord.ui.View):
         )
         await interaction.response.send_message(explanation, ephemeral=True)
 
-
-# ---------------- أمر: عرض الستريك الشخصي ----------------
-@bot.command(name="streak")
-async def streak_cmd(ctx, member: discord.Member = None):
-    target = member or ctx.author
-
-    if target.bot:
-        return
-
-    user = get_user(target.id)
-
-    embed = discord.Embed(
-        title=f"ستريك {target.display_name}",
-        color=discord.Color.orange(),
+    @discord.ui.button(
+        emoji="🔥",
+        style=discord.ButtonStyle.secondary,
+        custom_id="streak_view_button",
     )
-    embed.set_thumbnail(url=target.display_avatar.url)
-    embed.add_field(name="\u200E<a:j16:1534842771373035560> الستريك الحالي", value=str(user["streak"]), inline=True)
-    embed.add_field(name="\u200E", value="\u200E", inline=True)
-    embed.add_field(
-        name="<a:008Cinnamoroll_Excited:1525769555052335155> رسائل اليوم",
-        value=f"{user['messages_today']} / {MESSAGES_REQUIRED}",
-        inline=True,
-    )
-    if ctx.guild.icon:
-        embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url)
-    else:
-        embed.set_footer(text=ctx.guild.name)
-    embed.timestamp = datetime.now(TIMEZONE)
-
-    await ctx.send(embed=embed)
-
-
-@streak_cmd.error
-async def streak_cmd_error(ctx, error):
-    if isinstance(error, commands.MemberNotFound):
-        await ctx.send("ما لقيت هيك عضو، تأكد من المنشن أو الاسم.")
-    else:
-        raise error
+    async def streak_view(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = build_streak_embed(interaction.user, interaction.guild)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ---------------- أمر: تفعيل الستريك للشخص نفسه ----------------
