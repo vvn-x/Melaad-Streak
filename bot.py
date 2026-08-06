@@ -152,11 +152,11 @@ class StreakInfoView(discord.ui.View):
 async def enable_streak_cmd(ctx):
     user = get_user(ctx.author.id)
     if user["enabled"]:
-        await ctx.send("الستريك مفعل عندك أصلاً.")
+        await ctx.send("الستريك مفعل من قبل.")
         return
     user["enabled"] = True
     save_data(data)
-    await ctx.send("تم تفعيل الستريك عندك، رسائلك بالشات العام رح تحسب من هلق.")
+    await ctx.send("تم تفعيل الستريك.")
 
 
 # ---------------- أمر: إلغاء الستريك للشخص نفسه ----------------
@@ -164,44 +164,11 @@ async def enable_streak_cmd(ctx):
 async def disable_streak_cmd(ctx):
     user = get_user(ctx.author.id)
     if not user["enabled"]:
-        await ctx.send("الستريك ملغي عندك أصلاً.")
+        await ctx.send("الستريك ملغي من قبل.")
         return
     user["enabled"] = False
     save_data(data)
-    await ctx.send("تم إلغاء الستريك عندك، رسائلك بالشات العام ما رح تحسب لحد ما تفعله مرة ثانية.")
-
-
-# ---------------- أمر: أعلى 10 بالستريك ----------------
-@bot.command(name="top")
-async def top_cmd(ctx):
-    sorted_users = sorted(data.items(), key=lambda item: item[1]["streak"], reverse=True)
-    sorted_users = [u for u in sorted_users if u[1]["streak"] > 0][:10]
-
-    if not sorted_users:
-        embed = discord.Embed(
-            title="أعلى 10 بالستريك",
-            description="ما في حد عنده ستريك لسا.",
-            color=discord.Color.orange(),
-        )
-        await ctx.send(embed=embed)
-        return
-
-    lines = []
-    for uid, user in sorted_users:
-        member = ctx.guild.get_member(int(uid))
-        name = member.display_name if member else f"مستخدم غير موجود ({uid})"
-        lines.append(f"\u200E• {name}")
-
-    embed = discord.Embed(
-        title="أعلى 10 بالستريك",
-        description="\n".join(lines),
-        color=discord.Color.orange(),
-    )
-    if ctx.guild.icon:
-        embed.set_thumbnail(url=ctx.guild.icon.url)
-
-    await ctx.send(embed=embed)
-
+    await ctx.send("تم الغاء الستريك بنجاح.")
 
 # ---------------- زر تأكيد تصفير ستريك شخص ----------------
 class ConfirmResetView(discord.ui.View):
@@ -212,7 +179,7 @@ class ConfirmResetView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester_id:
-            await interaction.response.send_message("هاد الزر مو إلك.", ephemeral=True)
+            await interaction.response.send_message("هاذا الزر مو لك.", ephemeral=True)
             return False
         return True
 
@@ -256,11 +223,11 @@ async def reset_streak_cmd(ctx, member: discord.Member):
 @reset_streak_cmd.error
 async def reset_streak_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("هاد الأمر للإداريين بس.")
+        await ctx.send("هاذا الأمر خاص للادارة العلياً فقط.")
     elif isinstance(error, commands.MemberNotFound):
-        await ctx.send("ما لقيت هيك عضو، تأكد من المنشن أو الاسم.")
+        await ctx.send("لم اعثر على هاذا العضو تأكد من الأسم وحاول مرة اخرى.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("استخدم الأمر هيك: `!resetstreak @الشخص`")
+        await ctx.send("طريقة الاستخدام كذا: `!resetstreak @الشخص`")
     else:
         raise error
 
@@ -354,7 +321,7 @@ async def daily_reset_check():
                 user["reminded_today"] = False
                 user["locked_today"] = False
             save_data(data)
-            print(f"[{now}] تمت إعادة تعيين الستريك اليومي.")
+            print(f"[{now}] تم إعادة تعيين الستريك اليومي.")
 
 
 @bot.event
