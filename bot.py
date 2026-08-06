@@ -48,9 +48,11 @@ def get_user(user_id):
             "messages_today": 0,
             "achieved_today": False,
             "reminded_today": False,
+            "locked_today": False,
         }
-    # لو مستخدم قديم ما فيه الحقل الجديد، نضيفه
+    # لو مستخدم قديم ما فيه الحقول الجديدة، نضيفها
     data[uid].setdefault("reminded_today", False)
+    data[uid].setdefault("locked_today", False)
     return data[uid]
 
 
@@ -105,7 +107,7 @@ class ConfirmResetView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(self.target_id)
         data[uid] = {
@@ -113,6 +115,7 @@ class ConfirmResetView(discord.ui.View):
             "messages_today": 0,
             "achieved_today": False,
             "reminded_today": False,
+            "locked_today": True,  # يمنع الشخص من إعادة تحقيق الستريك بنفس اليوم
         }
         save_data(data)
         for item in self.children:
@@ -122,7 +125,7 @@ class ConfirmResetView(discord.ui.View):
         )
         self.stop()
 
-    @discord.ui.button(style=discord.ButtonStyle.danger, emoji="❌")
+    @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         for item in self.children:
             item.disabled = True
@@ -162,7 +165,7 @@ async def on_message(message):
     if message.channel.id == GENERAL_CHANNEL_ID:
         user = get_user(message.author.id)
 
-        if not user["achieved_today"]:
+        if not user["achieved_today"] and not user.get("locked_today", False):
             user["messages_today"] += 1
 
             if user["messages_today"] >= MESSAGES_REQUIRED:
@@ -237,6 +240,7 @@ async def daily_reset_check():
                 user["messages_today"] = 0
                 user["achieved_today"] = False
                 user["reminded_today"] = False
+                user["locked_today"] = False
             save_data(data)
             print(f"[{now}] تمت إعادة تعيين الستريك اليومي.")
 
