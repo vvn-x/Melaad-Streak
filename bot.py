@@ -77,11 +77,12 @@ class StreakInfoView(discord.ui.View):
 
 # ---------------- أمر: عرض الستريك الشخصي ----------------
 @bot.command(name="streak")
-async def streak_cmd(ctx):
-    user = get_user(ctx.author.id)
+async def streak_cmd(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    user = get_user(target.id)
 
     embed = discord.Embed(
-        title=f"ستريك {ctx.author.display_name}",
+        title=f"ستريك {target.display_name}",
         color=discord.Color.orange(),
     )
     embed.add_field(name="🔥 الستريك الحالي", value=str(user["streak"]), inline=True)
@@ -92,6 +93,14 @@ async def streak_cmd(ctx):
     )
 
     await ctx.send(embed=embed)
+
+
+@streak_cmd.error
+async def streak_cmd_error(ctx, error):
+    if isinstance(error, commands.MemberNotFound):
+        await ctx.send("ما لقيت هيك عضو، تأكد من المنشن أو الاسم.")
+    else:
+        raise error
 
 
 # ---------------- أمر: أعلى 10 بالستريك ----------------
