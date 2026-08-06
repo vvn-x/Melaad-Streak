@@ -91,7 +91,7 @@ async def streak_cmd(ctx, member: discord.Member = None):
         title=f"ستريك {target.display_name}",
         color=discord.Color.orange(),
     )
-    embed.add_field(name="\u200E<a:stars2:996850823780892702> الستريك الحالي", value=str(user["streak"]), inline=True)
+    embed.add_field(name="\u200E<a:j16:1095890149692407843> الستريك الحالي", value=str(user["streak"]), inline=True)
     embed.add_field(
         name="<a:008Cinnamoroll_Excited:1525769555052335155> رسائل اليوم",
         value=f"{user['messages_today']} / {MESSAGES_REQUIRED}",
