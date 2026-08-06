@@ -14,7 +14,29 @@ MESSAGES_REQUIRED = int(os.environ.get("MESSAGES_REQUIRED", "10"))   # عدد ا
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Amman"))        # المنطقة الزمنية
 RESET_HOUR = int(os.environ.get("RESET_HOUR", "0"))                  # ساعة تصفير الستريك اليومي (0-23)، 0 = 12 بالليل
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", str((RESET_HOUR - 1) % 24)))  # ساعة إرسال التذكير (افتراضيا قبل التصفير بساعة)
-DATA_FILE = "streaks.json"                                           # ملف تخزين بيانات الستريك
+
+# ⚠️ مهم: إذا كنت مستضيف البوت على Railway بدون Volume دائم، الملف هاد بينمسح مع كل Deploy/Restart.
+# اربط Volume دائم بمشروعك وحط مساره هون (مثلاً "/data/streaks.json") عشان ما تضيع بيانات الأعضاء.
+DATA_FILE = os.environ.get("DATA_FILE", "streaks.json")              # ملف تخزين بيانات الستريك
+
+FREEZES_PER_MONTH = int(os.environ.get("FREEZES_PER_MONTH", "1"))    # عدد أيام "التجميد" المسموحة شهريًا لكل عضو
+
+# رتب المراحل: صيغة "عدد_الأيام:آيدي_الرتبة" مفصولة بفواصل، مثال: "7:123456,30:654321"
+def _parse_milestones(raw: str):
+    milestones = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        day_str, role_str = part.split(":", 1)
+        try:
+            milestones[int(day_str.strip())] = int(role_str.strip())
+        except ValueError:
+            continue
+    return milestones
+
+
+STREAK_MILESTONE_ROLES = _parse_milestones(os.environ.get("STREAK_MILESTONES", ""))
 # =====================================================
 
 intents = discord.Intents.default()
