@@ -252,7 +252,7 @@ async def reset_streak_error(ctx, error):
 async def hi_cmd(ctx):
     try:
         await ctx.author.send(
-            f"تنبيه ! متبقي لك فقط {MESSAGES_REQUIRED} فقط ليكتمل الستريك اليوم "
+            f"تنبيه ! متبقي لك {MESSAGES_REQUIRED} رسائل فقط ليكتمل الستريك اليوم "
             f"( الستريك الحالي : 0 ) {REMINDER_EMOJI}"
         )
         await ctx.send("بعتلك رسالة تجربة عالخاص، تأكد الايموجي طالع صح 👌")
@@ -320,7 +320,7 @@ async def reminder_check():
                 if member:
                     try:
                         await member.send(
-                            f"تنبيه ! متبقي لك فقط {remaining} فقط ليكتمل الستريك اليوم "
+                            f"تنبيه ! متبقي لك {remaining} رسائل فقط ليكتمل الستريك اليوم "
                             f"( الستريك الحالي : {user['streak']} ) {REMINDER_EMOJI}"
                         )
                     except discord.Forbidden:
