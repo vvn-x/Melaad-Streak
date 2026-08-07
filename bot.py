@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 # هاي القيم بتنجيب من Environment Variables (تنضبط من Railway مباشرة).
 # لو بدك تشغل الكود محليًا بدون Railway، بتقدر تحط القيم مباشرة بدل os.environ.get(...)
 TOKEN = os.environ.get("DISCORD_TOKEN")                              # توكن البوت
-GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "0"))  # آيدي الروم العام
+GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "0"))  # آيدي الروم العام (يلي فيه بتنحسب الرسائل)
+COMMANDS_CHANNEL_ID = int(os.environ.get("COMMANDS_CHANNEL_ID", "0"))  # آيدي شات الأوامر (تفعيل/إلغاء الستريك)
 MESSAGES_REQUIRED = int(os.environ.get("MESSAGES_REQUIRED", "10"))   # عدد الرسائل المطلوب باليوم
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Amman"))        # المنطقة الزمنية
 RESET_HOUR = int(os.environ.get("RESET_HOUR", "0"))                  # ساعة تصفير الستريك اليومي (0-23)، 0 = 12 بالليل
@@ -20,6 +21,9 @@ REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", str((RESET_HOUR - 1) % 24)))
 DATA_FILE = os.environ.get("DATA_FILE", "streaks.json")              # ملف تخزين بيانات الستريك
 
 FREEZES_PER_MONTH = int(os.environ.get("FREEZES_PER_MONTH", "1"))    # عدد أيام "التجميد" المسموحة شهريًا لكل عضو
+
+# إيموجي التنبيه بالخاص (الصيغة: <a:الاسم:الآيدي> للأيموجي المتحرك). عدّل الاسم إذا ما ظهر صح بالسيرفر عندك.
+REMINDER_EMOJI = os.environ.get("REMINDER_EMOJI", "<a:emoji:1525828157977006201>")
 
 # رتب المراحل: صيغة "عدد_الأيام:آيدي_الرتبة" مفصولة بفواصل، مثال: "7:123456,30:654321"
 def _parse_milestones(raw: str):
@@ -150,6 +154,11 @@ class StreakInfoView(discord.ui.View):
 # ---------------- أمر: تفعيل الستريك للشخص نفسه ----------------
 @bot.command(name="enablestreak")
 async def enable_streak_cmd(ctx):
+    # هاد الأمر لازم ينكتب بشات الأوامر فقط (مش بشات الستريك العام)
+    if COMMANDS_CHANNEL_ID and ctx.channel.id != COMMANDS_CHANNEL_ID:
+        await ctx.send(f"هاذا الأمر لازم تكتبه بشات الأوامر <#{COMMANDS_CHANNEL_ID}> فقط.")
+        return
+
     user = get_user(ctx.author.id)
     if user["enabled"]:
         await ctx.send("الستريك مفعل من قبل.")
@@ -162,6 +171,11 @@ async def enable_streak_cmd(ctx):
 # ---------------- أمر: إلغاء الستريك للشخص نفسه ----------------
 @bot.command(name="disablestreak")
 async def disable_streak_cmd(ctx):
+    # هاد الأمر لازم ينكتب بشات الأوامر فقط (مش بشات الستريك العام)
+    if COMMANDS_CHANNEL_ID and ctx.channel.id != COMMANDS_CHANNEL_ID:
+        await ctx.send(f"هاذا الأمر لازم تكتبه بشات الأوامر <#{COMMANDS_CHANNEL_ID}> فقط.")
+        return
+
     user = get_user(ctx.author.id)
     if not user["enabled"]:
         await ctx.send("الستريك ملغي من قبل.")
@@ -192,6 +206,7 @@ class ConfirmResetView(discord.ui.View):
             "achieved_today": False,
             "reminded_today": False,
             "locked_today": True,  # يمنع الشخص من إعادة تحقيق الستريك بنفس اليوم
+            "enabled": True,
         }
         save_data(data)
         for item in self.children:
@@ -232,6 +247,19 @@ async def reset_streak_error(ctx, error):
         raise error
 
 
+# ---------------- أمر تجربة: يبعت رسالة التذكير عالخاص عشان تتأكد الايموجي طالع صح ----------------
+@bot.command(name="hi")
+async def hi_cmd(ctx):
+    try:
+        await ctx.author.send(
+            f"تنبيه ! متبقي لك فقط {MESSAGES_REQUIRED} فقط ليكتمل الستريك اليوم "
+            f"( الستريك الحالي : 0 ) {REMINDER_EMOJI}"
+        )
+        await ctx.send("بعتلك رسالة تجربة عالخاص، تأكد الايموجي طالع صح 👌")
+    except discord.Forbidden:
+        await ctx.send("ما قدرت ابعتلك رسالة عالخاص، تأكد انو الخاص مفتوح عندك.")
+
+
 # ---------------- عند استلام رسالة ----------------
 @bot.event
 async def on_message(message):
@@ -270,34 +298,37 @@ last_reminder_date = None
 async def reminder_check():
     global last_reminder_date
     now = datetime.now(TIMEZONE)
+    today_str = now.strftime("%Y-%m-%d")
 
-    if now.hour == REMINDER_HOUR and now.minute == 0:
-        today_str = now.strftime("%Y-%m-%d")
-        if last_reminder_date != today_str:
-            last_reminder_date = today_str
+    reminder_threshold = now.replace(hour=REMINDER_HOUR, minute=0, second=0, microsecond=0)
 
-            for uid, user in data.items():
-                if not user["achieved_today"] and not user.get("reminded_today", False):
-                    remaining = max(0, MESSAGES_REQUIRED - user["messages_today"])
-                    if remaining <= 0:
-                        continue
-                    member = None
-                    for guild in bot.guilds:
-                        member = guild.get_member(int(uid))
-                        if member:
-                            break
+    # بدل ما نشيك تطابق دقيق بالدقيقة (كان ممكن يفوت لو تأخر البوت شوي)، نشيك إذا الوقت عدى وقت التذكير
+    # ولسا ما انبعث تذكير اليوم
+    if now >= reminder_threshold and last_reminder_date != today_str:
+        last_reminder_date = today_str
+
+        for uid, user in data.items():
+            if not user["achieved_today"] and not user.get("reminded_today", False):
+                remaining = max(0, MESSAGES_REQUIRED - user["messages_today"])
+                if remaining <= 0:
+                    continue
+                member = None
+                for guild in bot.guilds:
+                    member = guild.get_member(int(uid))
                     if member:
-                        try:
-                            await member.send(
-                                f"⏰ تنبيه! باقيلك {remaining} رسالة بس عشان يكمل ستريكك اليوم "
-                                f"(الستريك الحالي: {user['streak']}). لا تخليه ينقطع 🔥"
-                            )
-                        except discord.Forbidden:
-                            pass  # الخاص مقفول عنده
-                    user["reminded_today"] = True
+                        break
+                if member:
+                    try:
+                        await member.send(
+                            f"تنبيه ! متبقي لك فقط {remaining} فقط ليكتمل الستريك اليوم "
+                            f"( الستريك الحالي : {user['streak']} ) {REMINDER_EMOJI}"
+                        )
+                    except discord.Forbidden:
+                        pass  # الخاص مقفول عنده
+                user["reminded_today"] = True
 
-            save_data(data)
-            print(f"[{now}] تم إرسال تذكيرات الستريك.")
+        save_data(data)
+        print(f"[{now}] تم إرسال تذكيرات الستريك.")
 
 
 # ---------------- إعادة التصفير اليومية ----------------
@@ -308,20 +339,24 @@ last_reset_date = None
 async def daily_reset_check():
     global last_reset_date
     now = datetime.now(TIMEZONE)
+    today_str = now.strftime("%Y-%m-%d")
 
-    if now.hour == RESET_HOUR and now.minute == 0:
-        today_str = now.strftime("%Y-%m-%d")
-        if last_reset_date != today_str:
-            last_reset_date = today_str
-            for uid, user in data.items():
-                if not user["achieved_today"]:
-                    user["streak"] = 0
-                user["messages_today"] = 0
-                user["achieved_today"] = False
-                user["reminded_today"] = False
-                user["locked_today"] = False
-            save_data(data)
-            print(f"[{now}] تم إعادة تعيين الستريك اليومي.")
+    reset_threshold = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+
+    # نفس مبدأ التذكير: نشيك إذا عدى وقت التصفير ولسا ما انصفر اليوم
+    # (هاد بيحل مشكلة عدم احتساب ستريك جديد بعد نص الليل، لأن الفحص القديم كان يعتمد
+    # على تطابق دقيق بالثانية وبيفوت لو تأخر البوت ولو بثانية وحدة)
+    if now >= reset_threshold and last_reset_date != today_str:
+        last_reset_date = today_str
+        for uid, user in data.items():
+            if not user["achieved_today"]:
+                user["streak"] = 0
+            user["messages_today"] = 0
+            user["achieved_today"] = False
+            user["reminded_today"] = False
+            user["locked_today"] = False
+        save_data(data)
+        print(f"[{now}] تم إعادة تعيين الستريك اليومي.")
 
 
 @bot.event
