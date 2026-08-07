@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
-import json
 import os
+import asyncpg
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -16,9 +16,8 @@ TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Amman"))        # المن�
 RESET_HOUR = int(os.environ.get("RESET_HOUR", "0"))                  # ساعة تصفير الستريك اليومي (0-23)، 0 = 12 بالليل
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", str((RESET_HOUR - 1) % 24)))  # ساعة إرسال التذكير (افتراضيا قبل التصفير بساعة)
 
-# ⚠️ مهم: إذا كنت مستضيف البوت على Railway بدون Volume دائم، الملف هاد بينمسح مع كل Deploy/Restart.
-# اربط Volume دائم بمشروعك وحط مساره هون (مثلاً "/data/streaks.json") عشان ما تضيع بيانات الأعضاء.
-DATA_FILE = os.environ.get("DATA_FILE", "streaks.json")              # ملف تخزين بيانات الستريك
+# رابط الاتصال بقاعدة بيانات PostgreSQL (Railway بيضيفه تلقائيًا لما تضيف خدمة Postgres للمشروع)
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 FREEZES_PER_MONTH = int(os.environ.get("FREEZES_PER_MONTH", "1"))    # عدد أيام "التجميد" المسموحة شهريًا لكل عضو
 
@@ -47,23 +46,133 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ==================== قاعدة البيانات (PostgreSQL) ====================
+CREATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS streaks (
+    user_id        BIGINT  PRIMARY KEY,
+    streak         INTEGER NOT NULL DEFAULT 0,
+    messages_today INTEGER NOT NULL DEFAULT 0,
+    achieved_today BOOLEAN NOT NULL DEFAULT FALSE,
+    reminded_today BOOLEAN NOT NULL DEFAULT FALSE,
+    locked_today   BOOLEAN NOT NULL DEFAULT FALSE,
+    enabled        BOOLEAN NOT NULL DEFAULT TRUE
+);
+"""
 
 
-# ---------------- تخزين البيانات ----------------
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+class StreakBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        self.pool: asyncpg.Pool | None = None
+
+    async def setup_hook(self):
+        # بينفذ مرة وحدة قبل ما البوت يتصل بديسكورد، مكان مثالي لإنشاء الاتصال بقاعدة البيانات
+        self.pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=5)
+        async with self.pool.acquire() as conn:
+            await conn.execute(CREATE_TABLE_SQL)
+        print("✅ تم الاتصال بقاعدة بيانات PostgreSQL وتجهيز الجدول.")
 
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+bot = StreakBot()
 
 
-data = load_data()
+# ---------------- استعلامات آمنة (parameterized) ولا تعتمد على كتابة ملف كامل ----------------
+
+async def get_user(user_id: int) -> dict:
+    """يرجع بيانات العضو، ولو أول مرة بينشئ صف افتراضي له بعملية واحدة ذرية (upsert)."""
+    async with bot.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO streaks (user_id) VALUES ($1)
+            ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id
+            RETURNING *;
+            """,
+            user_id,
+        )
+    return dict(row)
+
+
+async def set_enabled(user_id: int, enabled: bool) -> dict:
+    async with bot.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO streaks (user_id, enabled) VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE SET enabled = EXCLUDED.enabled
+            RETURNING *;
+            """,
+            user_id, enabled,
+        )
+    return dict(row)
+
+
+async def register_message(user_id: int) -> dict:
+    """يزيد عدد رسائل اليوم بعملية UPDATE ذرية وحدة، وبنفس الوقت يفحص إذا اكتمل الهدف
+    ويحدّث الستريك، كلشي بعملية واحدة آمنة بدون قراءة-ثم-كتابة منفصلة (يمنع تعارض التحديثات)."""
+    async with bot.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE streaks
+            SET messages_today = messages_today + 1,
+                achieved_today = (messages_today + 1) >= $2,
+                streak = streak + CASE WHEN (messages_today + 1) >= $2 THEN 1 ELSE 0 END
+            WHERE user_id = $1
+            RETURNING *;
+            """,
+            user_id, MESSAGES_REQUIRED,
+        )
+    return dict(row)
+
+
+async def reset_user(user_id: int) -> dict:
+    """تصفير ستريك عضو معيّن (أمر الإدارة)."""
+    async with bot.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO streaks (user_id, streak, messages_today, achieved_today, reminded_today, locked_today, enabled)
+            VALUES ($1, 0, 0, FALSE, FALSE, TRUE, TRUE)
+            ON CONFLICT (user_id) DO UPDATE SET
+                streak = 0,
+                messages_today = 0,
+                achieved_today = FALSE,
+                reminded_today = FALSE,
+                locked_today = TRUE,
+                enabled = TRUE
+            RETURNING *;
+            """,
+            user_id,
+        )
+    return dict(row)
+
+
+async def daily_reset_all():
+    """إعادة تعيين بيانات كل الأعضاء دفعة وحدة بعملية SQL وحدة (بدل ما نلف على كل عضو بالكود)."""
+    async with bot.pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE streaks
+            SET streak = CASE WHEN achieved_today THEN streak ELSE 0 END,
+                messages_today = 0,
+                achieved_today = FALSE,
+                reminded_today = FALSE,
+                locked_today = FALSE;
+            """
+        )
+
+
+async def fetch_reminder_candidates():
+    """يرجع كل الأعضاء يلي لسا ما حققوا هدف اليوم وما انبعتلهم تذكير."""
+    async with bot.pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id, streak, messages_today FROM streaks WHERE achieved_today = FALSE AND reminded_today = FALSE;"
+        )
+    return rows
+
+
+async def mark_reminded(user_id: int):
+    async with bot.pool.acquire() as conn:
+        await conn.execute("UPDATE streaks SET reminded_today = TRUE WHERE user_id = $1;", user_id)
+
 
 # لمنع معالجة نفس الرسالة مرتين (بيصير أحيانًا بعد إعادة اتصال البوت بديسكورد)
 from collections import deque
@@ -82,26 +191,8 @@ def already_processed(message_id: int) -> bool:
     return False
 
 
-def get_user(user_id):
-    uid = str(user_id)
-    if uid not in data:
-        data[uid] = {
-            "streak": 0,
-            "messages_today": 0,
-            "achieved_today": False,
-            "reminded_today": False,
-            "locked_today": False,
-            "enabled": True,
-        }
-    # لو مستخدم قديم ما فيه الحقول الجديدة، نضيفها
-    data[uid].setdefault("reminded_today", False)
-    data[uid].setdefault("locked_today", False)
-    data[uid].setdefault("enabled", True)
-    return data[uid]
-
-
-def build_streak_embed(target, guild):
-    user = get_user(target.id)
+async def build_streak_embed(target, guild):
+    user = await get_user(target.id)
 
     embed = discord.Embed(
         title=f"ستريك {target.display_name}",
@@ -147,7 +238,7 @@ class StreakInfoView(discord.ui.View):
         custom_id="streak_view_button",
     )
     async def streak_view(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = build_streak_embed(interaction.user, interaction.guild)
+        embed = await build_streak_embed(interaction.user, interaction.guild)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -161,12 +252,11 @@ async def enable_streak_cmd(interaction: discord.Interaction):
         )
         return
 
-    user = get_user(interaction.user.id)
+    user = await get_user(interaction.user.id)
     if user["enabled"]:
         await interaction.response.send_message("الستريك مفعل من قبل.", ephemeral=True)
         return
-    user["enabled"] = True
-    save_data(data)
+    await set_enabled(interaction.user.id, True)
     await interaction.response.send_message("تم تفعيل الستريك.", ephemeral=True)
 
 
@@ -180,12 +270,11 @@ async def disable_streak_cmd(interaction: discord.Interaction):
         )
         return
 
-    user = get_user(interaction.user.id)
+    user = await get_user(interaction.user.id)
     if not user["enabled"]:
         await interaction.response.send_message("الستريك ملغي من قبل.", ephemeral=True)
         return
-    user["enabled"] = False
-    save_data(data)
+    await set_enabled(interaction.user.id, False)
     await interaction.response.send_message("تم الغاء الستريك بنجاح.", ephemeral=True)
 
 # ---------------- زر تأكيد تصفير ستريك شخص ----------------
@@ -203,16 +292,7 @@ class ConfirmResetView(discord.ui.View):
 
     @discord.ui.button(style=discord.ButtonStyle.secondary, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        uid = str(self.target_id)
-        data[uid] = {
-            "streak": 0,
-            "messages_today": 0,
-            "achieved_today": False,
-            "reminded_today": False,
-            "locked_today": True,  # يمنع الشخص من إعادة تحقيق الستريك بنفس اليوم
-            "enabled": True,
-        }
-        save_data(data)
+        await reset_user(self.target_id)
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(
@@ -261,22 +341,16 @@ async def on_message(message):
         return
 
     if message.channel.id == GENERAL_CHANNEL_ID:
-        user = get_user(message.author.id)
+        user = await get_user(message.author.id)
 
         if user.get("enabled", True) and not user["achieved_today"] and not user.get("locked_today", False):
-            user["messages_today"] += 1
+            updated = await register_message(message.author.id)
 
-            if user["messages_today"] >= MESSAGES_REQUIRED:
-                user["achieved_today"] = True
-                user["streak"] += 1
-                save_data(data)
-
+            if updated["achieved_today"] and updated["messages_today"] == MESSAGES_REQUIRED:
                 await message.channel.send(
-                    f"مبروك يا اسطورة {message.author.mention} , وصلت الستريك {user['streak']} <a:b_NE20:1513171162157416609>",
+                    f"مبروك يا اسطورة {message.author.mention} , وصلت الستريك {updated['streak']} <a:b_NE20:1513171162157416609>",
                     view=StreakInfoView(),
                 )
-            else:
-                save_data(data)
 
     await bot.process_commands(message)
 
@@ -298,27 +372,27 @@ async def reminder_check():
     if now >= reminder_threshold and last_reminder_date != today_str:
         last_reminder_date = today_str
 
-        for uid, user in data.items():
-            if not user["achieved_today"] and not user.get("reminded_today", False):
-                remaining = max(0, MESSAGES_REQUIRED - user["messages_today"])
-                if remaining <= 0:
-                    continue
-                member = None
-                for guild in bot.guilds:
-                    member = guild.get_member(int(uid))
-                    if member:
-                        break
+        candidates = await fetch_reminder_candidates()
+        for row in candidates:
+            uid = row["user_id"]
+            remaining = max(0, MESSAGES_REQUIRED - row["messages_today"])
+            if remaining <= 0:
+                continue
+            member = None
+            for guild in bot.guilds:
+                member = guild.get_member(uid)
                 if member:
-                    try:
-                        await member.send(
-                            f"تنبيه ! متبقي لك {remaining} رسائل فقط ليكتمل الستريك اليوم "
-                            f"( الستريك الحالي : {user['streak']} ) {REMINDER_EMOJI}"
-                        )
-                    except discord.Forbidden:
-                        pass  # الخاص مقفول عنده
-                user["reminded_today"] = True
+                    break
+            if member:
+                try:
+                    await member.send(
+                        f"تنبيه ! متبقي لك {remaining} رسائل فقط ليكتمل الستريك اليوم "
+                        f"( الستريك الحالي : {row['streak']} ) {REMINDER_EMOJI}"
+                    )
+                except discord.Forbidden:
+                    pass  # الخاص مقفول عنده
+            await mark_reminded(uid)
 
-        save_data(data)
         print(f"[{now}] تم إرسال تذكيرات الستريك.")
 
 
@@ -339,14 +413,7 @@ async def daily_reset_check():
     # على تطابق دقيق بالثانية وبيفوت لو تأخر البوت ولو بثانية وحدة)
     if now >= reset_threshold and last_reset_date != today_str:
         last_reset_date = today_str
-        for uid, user in data.items():
-            if not user["achieved_today"]:
-                user["streak"] = 0
-            user["messages_today"] = 0
-            user["achieved_today"] = False
-            user["reminded_today"] = False
-            user["locked_today"] = False
-        save_data(data)
+        await daily_reset_all()
         print(f"[{now}] تم إعادة تعيين الستريك اليومي.")
 
 
@@ -370,5 +437,8 @@ async def on_ready():
 
 if not TOKEN:
     raise SystemExit("❌ ما في توكن! ضيف DISCORD_TOKEN من إعدادات Variables بمشروع Railway.")
+
+if not DATABASE_URL:
+    raise SystemExit("❌ ما في رابط قاعدة بيانات! ضيف DATABASE_URL من إعدادات Variables (بعد ما تضيف خدمة PostgreSQL بمشروع Railway).")
 
 bot.run(TOKEN)
