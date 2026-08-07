@@ -247,19 +247,6 @@ async def reset_streak_error(ctx, error):
         raise error
 
 
-# ---------------- أمر تجربة: يبعت رسالة التذكير عالخاص عشان تتأكد الايموجي طالع صح ----------------
-@bot.command(name="hi")
-async def hi_cmd(ctx):
-    try:
-        await ctx.author.send(
-            f"تنبيه ! متبقي لك {MESSAGES_REQUIRED} رسائل فقط ليكتمل الستريك اليوم "
-            f"( الستريك الحالي : 0 ) {REMINDER_EMOJI}"
-        )
-        await ctx.send("بعتلك رسالة تجربة عالخاص، تأكد الايموجي طالع صح 👌")
-    except discord.Forbidden:
-        await ctx.send("ما قدرت ابعتلك رسالة عالخاص، تأكد انو الخاص مفتوح عندك.")
-
-
 # ---------------- عند استلام رسالة ----------------
 @bot.event
 async def on_message(message):
