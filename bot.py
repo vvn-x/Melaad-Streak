@@ -151,42 +151,38 @@ class StreakInfoView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# ---------------- أمر: تفعيل الستريك للشخص نفسه (سلاش كوماند - رسالة مخفية) ----------------
-@bot.tree.command(name="enablestreak", description="تفعيل الستريك الخاص فيك")
-async def enable_streak_cmd(interaction: discord.Interaction):
+# ---------------- أمر: تفعيل الستريك للشخص نفسه ----------------
+@bot.command(name="enablestreak")
+async def enable_streak_cmd(ctx):
     # هاد الأمر لازم ينكتب بشات الأوامر فقط (مش بشات الستريك العام)
-    if COMMANDS_CHANNEL_ID and interaction.channel.id != COMMANDS_CHANNEL_ID:
-        await interaction.response.send_message(
-            f"هاذا الأمر لازم تكتبه بشات الأوامر <#{COMMANDS_CHANNEL_ID}> فقط.", ephemeral=True
-        )
+    if COMMANDS_CHANNEL_ID and ctx.channel.id != COMMANDS_CHANNEL_ID:
+        await ctx.send(f"هاذا الأمر لازم تكتبه بشات الأوامر <#{COMMANDS_CHANNEL_ID}> فقط.")
         return
 
-    user = get_user(interaction.user.id)
+    user = get_user(ctx.author.id)
     if user["enabled"]:
-        await interaction.response.send_message("الستريك مفعل من قبل.", ephemeral=True)
+        await ctx.send("الستريك مفعل من قبل.")
         return
     user["enabled"] = True
     save_data(data)
-    await interaction.response.send_message("تم تفعيل الستريك.", ephemeral=True)
+    await ctx.send("تم تفعيل الستريك.")
 
 
-# ---------------- أمر: إلغاء الستريك للشخص نفسه (سلاش كوماند - رسالة مخفية) ----------------
-@bot.tree.command(name="disablestreak", description="الغاء الستريك الخاص فيك")
-async def disable_streak_cmd(interaction: discord.Interaction):
+# ---------------- أمر: إلغاء الستريك للشخص نفسه ----------------
+@bot.command(name="disablestreak")
+async def disable_streak_cmd(ctx):
     # هاد الأمر لازم ينكتب بشات الأوامر فقط (مش بشات الستريك العام)
-    if COMMANDS_CHANNEL_ID and interaction.channel.id != COMMANDS_CHANNEL_ID:
-        await interaction.response.send_message(
-            f"هاذا الأمر لازم تكتبه بشات الأوامر <#{COMMANDS_CHANNEL_ID}> فقط.", ephemeral=True
-        )
+    if COMMANDS_CHANNEL_ID and ctx.channel.id != COMMANDS_CHANNEL_ID:
+        await ctx.send(f"هاذا الأمر لازم تكتبه بشات الأوامر <#{COMMANDS_CHANNEL_ID}> فقط.")
         return
 
-    user = get_user(interaction.user.id)
+    user = get_user(ctx.author.id)
     if not user["enabled"]:
-        await interaction.response.send_message("الستريك ملغي من قبل.", ephemeral=True)
+        await ctx.send("الستريك ملغي من قبل.")
         return
     user["enabled"] = False
     save_data(data)
-    await interaction.response.send_message("تم الغاء الستريك بنجاح.", ephemeral=True)
+    await ctx.send("تم الغاء الستريك بنجاح.")
 
 # ---------------- زر تأكيد تصفير ستريك شخص ----------------
 class ConfirmResetView(discord.ui.View):
@@ -357,11 +353,6 @@ async def on_ready():
         activity=discord.Activity(type=discord.ActivityType.playing, name="programed by mist")
     )
     bot.add_view(StreakInfoView())  # يخلي الزر شغال بعد أي ريستارت
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ تم تسجيل {len(synced)} أوامر سلاش.")
-    except Exception as e:
-        print(f"⚠️ صار خطأ بتسجيل أوامر السلاش: {e}")
     if not daily_reset_check.is_running():
         daily_reset_check.start()
     if not reminder_check.is_running():
