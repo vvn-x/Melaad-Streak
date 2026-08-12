@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS streaks (
     locked_today   BOOLEAN NOT NULL DEFAULT FALSE,
     enabled        BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+CREATE TABLE IF NOT EXISTS bot_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -143,6 +148,26 @@ async def reset_user(user_id: int) -> dict:
             user_id,
         )
     return dict(row)
+
+
+async def get_bot_state(key: str):
+    async with bot.pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT value FROM bot_state WHERE key = $1;",
+            key,
+        )
+
+
+async def set_bot_state(key: str, value: str):
+    async with bot.pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO bot_state (key, value)
+            VALUES ($1, $2)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+            """,
+            key, value,
+        )
 
 
 async def daily_reset_all():
@@ -409,23 +434,25 @@ async def reminder_check():
 
 
 # ---------------- إعادة التصفير اليومية ----------------
-last_reset_date = None
-
-
 @tasks.loop(seconds=30)
 async def daily_reset_check():
-    global last_reset_date
     now = datetime.now(TIMEZONE)
     today_str = now.strftime("%Y-%m-%d")
 
-    reset_threshold = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+    reset_threshold = now.replace(
+        hour=RESET_HOUR,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
 
-    # نفس مبدأ التذكير: نشيك إذا عدى وقت التصفير ولسا ما انصفر اليوم
-    # (هاد بيحل مشكلة عدم احتساب ستريك جديد بعد نص الليل، لأن الفحص القديم كان يعتمد
-    # على تطابق دقيق بالثانية وبيفوت لو تأخر البوت ولو بثانية وحدة)
+    # نخزن تاريخ آخر تصفير داخل PostgreSQL بدل الذاكرة.
+    # بهذا الشكل Restart / Redeploy ما يعيد التصفير مرة ثانية بنفس اليوم.
+    last_reset_date = await get_bot_state("last_streak_reset_date")
+
     if now >= reset_threshold and last_reset_date != today_str:
-        last_reset_date = today_str
         await daily_reset_all()
+        await set_bot_state("last_streak_reset_date", today_str)
         print(f"[{now}] تم إعادة تعيين الستريك اليومي.")
 
 
