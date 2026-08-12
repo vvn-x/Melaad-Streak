@@ -161,10 +161,17 @@ async def daily_reset_all():
 
 
 async def fetch_reminder_candidates():
-    """يرجع كل الأعضاء يلي لسا ما حققوا هدف اليوم وما انبعتلهم تذكير."""
+    """يرجع كل الأعضاء المفعّل عندهم الستريك (enabled) ولسا ما حققوا هدف اليوم وما انبعتلهم تذكير.
+    (تمت إضافة شرط enabled = TRUE عشان الأعضاء يلي عملوا /disablestreak ما توصلهم رسائل تذكير بالخاص)."""
     async with bot.pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT user_id, streak, messages_today FROM streaks WHERE achieved_today = FALSE AND reminded_today = FALSE;"
+            """
+            SELECT user_id, streak, messages_today
+            FROM streaks
+            WHERE achieved_today = FALSE
+              AND reminded_today = FALSE
+              AND enabled = TRUE;
+            """
         )
     return rows
 
@@ -275,6 +282,11 @@ async def disable_streak_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("الستريك ملغي من قبل.", ephemeral=True)
         return
     await set_enabled(interaction.user.id, False)
+    # نعتبره متذكّر لليوم عشان ما توصله رسالة تذكير بالخاص لهاليوم مباشرة بعد ما ألغى الستريك
+    async with bot.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE streaks SET reminded_today = TRUE WHERE user_id = $1;", interaction.user.id
+        )
     await interaction.response.send_message("تم الغاء الستريك بنجاح.", ephemeral=True)
 
 # ---------------- زر تأكيد تصفير ستريك شخص ----------------
@@ -440,5 +452,3 @@ if not TOKEN:
 
 if not DATABASE_URL:
     raise SystemExit("❌ ما في رابط قاعدة بيانات! ضيف DATABASE_URL من إعدادات Variables (بعد ما تضيف خدمة PostgreSQL بمشروع Railway).")
-
-bot.run(TOKEN)
