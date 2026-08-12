@@ -452,3 +452,5 @@ if not TOKEN:
 
 if not DATABASE_URL:
     raise SystemExit("❌ ما في رابط قاعدة بيانات! ضيف DATABASE_URL من إعدادات Variables (بعد ما تضيف خدمة PostgreSQL بمشروع Railway).")
+
+bot.run(TOKEN)
