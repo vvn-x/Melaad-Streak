@@ -19,27 +19,8 @@ REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", str((RESET_HOUR - 1) % 24)))
 # رابط الاتصال بقاعدة بيانات PostgreSQL (Railway بيضيفه تلقائيًا لما تضيف خدمة Postgres للمشروع)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-FREEZES_PER_MONTH = int(os.environ.get("FREEZES_PER_MONTH", "1"))    # عدد أيام "التجميد" المسموحة شهريًا لكل عضو
-
 # إيموجي التنبيه بالخاص (الصيغة: <a:الاسم:الآيدي> للأيموجي المتحرك). عدّل الاسم إذا ما ظهر صح بالسيرفر عندك.
 REMINDER_EMOJI = os.environ.get("REMINDER_EMOJI", "<a:emoji:1525828157977006201>")
-
-# رتب المراحل: صيغة "عدد_الأيام:آيدي_الرتبة" مفصولة بفواصل، مثال: "7:123456,30:654321"
-def _parse_milestones(raw: str):
-    milestones = {}
-    for part in raw.split(","):
-        part = part.strip()
-        if not part or ":" not in part:
-            continue
-        day_str, role_str = part.split(":", 1)
-        try:
-            milestones[int(day_str.strip())] = int(role_str.strip())
-        except ValueError:
-            continue
-    return milestones
-
-
-STREAK_MILESTONE_ROLES = _parse_milestones(os.environ.get("STREAK_MILESTONES", ""))
 # =====================================================
 
 intents = discord.Intents.default()
@@ -113,14 +94,24 @@ async def set_enabled(user_id: int, enabled: bool) -> dict:
 
 async def register_message(user_id: int) -> dict:
     """يزيد عدد رسائل اليوم بعملية UPDATE ذرية وحدة، وبنفس الوقت يفحص إذا اكتمل الهدف
-    ويحدّث الستريك، كلشي بعملية واحدة آمنة بدون قراءة-ثم-كتابة منفصلة (يمنع تعارض التحديثات)."""
+    ويحدّث الستريك، كلشي بعملية واحدة آمنة بدون قراءة-ثم-كتابة منفصلة (يمنع تعارض التحديثات).
+
+    ملاحظة: شرط زيادة الستريك مبني على achieved_today الحالية المخزّنة بنفس صف الـ UPDATE
+    (مش على قيمة اتجابت مسبقًا بقراءة منفصلة)، عشان لو وصلت أكتر من رسالة بنفس اللحظة
+    ما ينزاد الستريك أكتر من مرة لنفس اليوم."""
     async with bot.pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             UPDATE streaks
             SET messages_today = messages_today + 1,
-                achieved_today = (messages_today + 1) >= $2,
-                streak = streak + CASE WHEN (messages_today + 1) >= $2 THEN 1 ELSE 0 END
+                streak = CASE
+                    WHEN NOT achieved_today AND (messages_today + 1) >= $2 THEN streak + 1
+                    ELSE streak
+                END,
+                achieved_today = CASE
+                    WHEN (messages_today + 1) >= $2 THEN TRUE
+                    ELSE achieved_today
+                END
             WHERE user_id = $1
             RETURNING *;
             """,
@@ -314,6 +305,38 @@ async def disable_streak_cmd(interaction: discord.Interaction):
         )
     await interaction.response.send_message("تم الغاء الستريك بنجاح.", ephemeral=True)
 
+
+# ---------------- أمر: عرض أعلى 10 بالستريكات ----------------
+@bot.tree.command(name="topstreak", description="عرض اعلى 10 بالستريكات")
+async def top_streak_cmd(interaction: discord.Interaction):
+    async with bot.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT user_id, streak
+            FROM streaks
+            ORDER BY streak DESC
+            LIMIT 10;
+            """
+        )
+
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    lines = []
+    for i, row in enumerate(rows, start=1):
+        medal = medals.get(i)
+        line = f"{i}. <@{row['user_id']}> : {row['streak']}"
+        if medal:
+            line += f" {medal}"
+        lines.append(line)
+
+    embed = discord.Embed(
+        title="Top Streak",
+        description="\n".join(lines) if lines else "ما في بيانات بعد.",
+        color=discord.Color.orange(),
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
 # ---------------- زر تأكيد تصفير ستريك شخص ----------------
 class ConfirmResetView(discord.ui.View):
     def __init__(self, target_id: int, requester_id: int):
@@ -393,21 +416,24 @@ async def on_message(message):
 
 
 # ---------------- تذكير خاص قبل انقطاع الستريك ----------------
-last_reminder_date = None
+REMINDER_STATE_KEY = "last_reminder_date"
 
 
 @tasks.loop(seconds=30)
 async def reminder_check():
-    global last_reminder_date
     now = datetime.now(TIMEZONE)
     today_str = now.strftime("%Y-%m-%d")
 
     reminder_threshold = now.replace(hour=REMINDER_HOUR, minute=0, second=0, microsecond=0)
 
+    # نخزن تاريخ آخر تذكير داخل PostgreSQL (bot_state) بدل متغير بالذاكرة، عشان لو صار
+    # Restart / Redeploy بنفس اليوم بعد ما انبعتت التذكيرات، ما ننبعت تذكيرات مكررة من جديد.
+    last_reminder_date = await get_bot_state(REMINDER_STATE_KEY)
+
     # بدل ما نشيك تطابق دقيق بالدقيقة (كان ممكن يفوت لو تأخر البوت شوي)، نشيك إذا الوقت عدى وقت التذكير
     # ولسا ما انبعث تذكير اليوم
     if now >= reminder_threshold and last_reminder_date != today_str:
-        last_reminder_date = today_str
+        await set_bot_state(REMINDER_STATE_KEY, today_str)
 
         candidates = await fetch_reminder_candidates()
         for row in candidates:
@@ -415,19 +441,19 @@ async def reminder_check():
             remaining = max(0, MESSAGES_REQUIRED - row["messages_today"])
             if remaining <= 0:
                 continue
-            member = None
-            for guild in bot.guilds:
-                member = guild.get_member(uid)
-                if member:
-                    break
-            if member:
-                try:
-                    await member.send(
-                        f"تنبيه ! متبقي لك {remaining} رسائل فقط ليكتمل الستريك اليوم "
-                        f"( الستريك الحالي : {row['streak']} ) {REMINDER_EMOJI}"
-                    )
-                except discord.Forbidden:
-                    pass  # الخاص مقفول عنده
+
+            # نستخدم fetch_user (طلب مباشر من الـ API) بدل الاعتماد على guild.get_member
+            # يلي بيعتمد على الـ Members Cache وممكن يرجع None للعضو حتى لو كان موجود فعليًا
+            # بالسيرفر، فتفوت رسالة التذكير بدون أي خطأ ظاهر.
+            try:
+                member = await bot.fetch_user(uid)
+                await member.send(
+                    f"تنبيه ! متبقي لك {remaining} رسائل فقط ليكتمل الستريك اليوم "
+                    f"( الستريك الحالي : {row['streak']} ) {REMINDER_EMOJI}"
+                )
+            except (discord.Forbidden, discord.NotFound):
+                pass  # الخاص مقفول عنده أو المستخدم غير موجود
+
             await mark_reminded(uid)
 
         print(f"[{now}] تم إرسال تذكيرات الستريك.")
