@@ -19,27 +19,8 @@ REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", str((RESET_HOUR - 1) % 24)))
 # رابط الاتصال بقاعدة بيانات PostgreSQL (Railway بيضيفه تلقائيًا لما تضيف خدمة Postgres للمشروع)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-FREEZES_PER_MONTH = int(os.environ.get("FREEZES_PER_MONTH", "1"))    # عدد أيام "التجميد" المسموحة شهريًا لكل عضو
-
 # إيموجي التنبيه بالخاص (الصيغة: <a:الاسم:الآيدي> للأيموجي المتحرك). عدّل الاسم إذا ما ظهر صح بالسيرفر عندك.
 REMINDER_EMOJI = os.environ.get("REMINDER_EMOJI", "<a:emoji:1525828157977006201>")
-
-# رتب المراحل: صيغة "عدد_الأيام:آيدي_الرتبة" مفصولة بفواصل، مثال: "7:123456,30:654321"
-def _parse_milestones(raw: str):
-    milestones = {}
-    for part in raw.split(","):
-        part = part.strip()
-        if not part or ":" not in part:
-            continue
-        day_str, role_str = part.split(":", 1)
-        try:
-            milestones[int(day_str.strip())] = int(role_str.strip())
-        except ValueError:
-            continue
-    return milestones
-
-
-STREAK_MILESTONE_ROLES = _parse_milestones(os.environ.get("STREAK_MILESTONES", ""))
 # =====================================================
 
 intents = discord.Intents.default()
@@ -96,6 +77,12 @@ class StreakBot(commands.Bot):
             )
 
         print("✅ تم الاتصال بقاعدة بيانات PostgreSQL وتجهيز الجداول.")
+
+        try:
+            synced = await self.tree.sync()
+            print(f"✅ تم تسجيل {len(synced)} أوامر سلاش.")
+        except Exception as e:
+            print(f"⚠️ صار خطأ بتسجيل أوامر السلاش: {e}")
 
 
 bot = StreakBot()
@@ -242,7 +229,7 @@ async def fetch_reminder_candidates():
     """يرجع كل الأعضاء يلي لسا ما حققوا هدف اليوم وما انبعتلهم تذكير."""
     async with bot.pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT user_id, streak, messages_today FROM streaks WHERE achieved_today = FALSE AND reminded_today = FALSE;"
+            "SELECT user_id, streak, messages_today FROM streaks WHERE achieved_today = FALSE AND reminded_today = FALSE AND enabled = TRUE;"
         )
     return rows
 
@@ -250,6 +237,30 @@ async def fetch_reminder_candidates():
 async def mark_reminded(user_id: int):
     async with bot.pool.acquire() as conn:
         await conn.execute("UPDATE streaks SET reminded_today = TRUE WHERE user_id = $1;", user_id)
+
+
+async def get_top_streaks(limit: int = 10):
+    """يرجع أعلى الستريكات بالسيرفر (streak > 0)، مرتبة تنازليًا."""
+    async with bot.pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id, streak FROM streaks WHERE streak > 0 ORDER BY streak DESC LIMIT $1;",
+            limit,
+        )
+    return rows
+
+
+async def adjust_streak(user_id: int, amount: int) -> dict:
+    """يضيف (أو يطرح لو الرقم سالب) عدد أيام لستريك عضو معيّن، ولا يخلي الستريك ينزل تحت الصفر."""
+    async with bot.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO streaks (user_id, streak) VALUES ($1, GREATEST($2, 0))
+            ON CONFLICT (user_id) DO UPDATE SET streak = GREATEST(streaks.streak + $2, 0)
+            RETURNING *;
+            """,
+            user_id, amount,
+        )
+    return dict(row)
 
 
 # لمنع معالجة نفس الرسالة مرتين (بيصير أحيانًا بعد إعادة اتصال البوت بديسكورد)
@@ -316,6 +327,9 @@ class StreakInfoView(discord.ui.View):
         custom_id="streak_view_button",
     )
     async def streak_view(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("هاذا الزر يشتغل بس جوا السيرفر.", ephemeral=True)
+            return
         embed = await build_streak_embed(interaction.user, interaction.guild)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -359,8 +373,95 @@ async def disable_streak_cmd(interaction: discord.Interaction):
 # ---------------- أمر: عرض الستريك الخاص فيك (سلاش كوماند - رسالة مخفية) ----------------
 @bot.tree.command(name="mystreak", description="عرض الستريك الخاص فيك")
 async def my_streak_cmd(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message("هاذا الأمر يشتغل بس جوا السيرفر.", ephemeral=True)
+        return
     embed = await build_streak_embed(interaction.user, interaction.guild)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ---------------- أمر: أعلى الستريكات بالسيرفر (سلاش كوماند) ----------------
+RANK_EMOJIS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+
+@bot.tree.command(name="topstreak", description="عرض أعلى 10 ستريكات بالسيرفر")
+async def top_streak_cmd(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message("هاذا الأمر يشتغل بس جوا السيرفر.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=False)
+
+    rows = await get_top_streaks(10)
+
+    if not rows:
+        await interaction.followup.send("لا يوجد أي ستريك مسجل لحد الآن.")
+        return
+
+    lines = []
+    for i, row in enumerate(rows, start=1):
+        uid = row["user_id"]
+        streak = row["streak"]
+
+        member = interaction.guild.get_member(uid)
+        if not member:
+            try:
+                member = await interaction.guild.fetch_member(uid)
+            except (discord.NotFound, discord.HTTPException):
+                member = None
+
+        name = member.mention if member else f"<@{uid}>"
+        emoji = RANK_EMOJIS.get(i, f"**#{i}**")
+        lines.append(f"{emoji} {name} : **{streak}**")
+
+    embed = discord.Embed(
+        title="🏆 أعلى الستريكات بالسيرفر",
+        description="\n".join(lines),
+        color=discord.Color.gold(),
+    )
+    if interaction.guild.icon:
+        embed.set_footer(text=interaction.guild.name, icon_url=interaction.guild.icon.url)
+    else:
+        embed.set_footer(text=interaction.guild.name)
+    embed.timestamp = datetime.now(TIMEZONE)
+
+    await interaction.followup.send(embed=embed)
+
+
+# ---------------- أمر إداري: إضافة/طرح أيام لستريك عضو ----------------
+@bot.tree.command(name="addstreak", description="إضافة (أو طرح) عدد أيام لستريك عضو معيّن")
+@discord.app_commands.describe(member="الشخص", amount="عدد الأيام (رقم سالب للطرح)")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def add_streak_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if interaction.guild is None:
+        await interaction.response.send_message("هاذا الأمر يشتغل بس جوا السيرفر.", ephemeral=True)
+        return
+
+    if amount == 0:
+        await interaction.response.send_message("لازم تحط رقم غير الصفر.", ephemeral=True)
+        return
+
+    updated = await adjust_streak(member.id, amount)
+
+    verb = "تمت إضافة" if amount > 0 else "تم طرح"
+    await interaction.response.send_message(
+        f"{verb} {abs(amount)} من ستريك {member.mention}. الستريك الحالي الآن: **{updated['streak']}**"
+    )
+
+
+@add_streak_cmd.error
+async def add_streak_error(interaction: discord.Interaction, error):
+    if isinstance(error, discord.app_commands.MissingPermissions):
+        msg = "هاذا الأمر خاص للادارة العلياً فقط."
+    else:
+        msg = "صار خطأ غير متوقع بتنفيذ الأمر."
+        print(f"⚠️ addstreak خطأ: {error}")
+
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
+
 
 # ---------------- زر تأكيد تصفير ستريك شخص ----------------
 class ConfirmResetView(discord.ui.View):
@@ -532,11 +633,6 @@ async def on_ready():
         activity=discord.Activity(type=discord.ActivityType.playing, name="programed by mist")
     )
     bot.add_view(StreakInfoView())  # يخلي الزر شغال بعد أي ريستارت
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ تم تسجيل {len(synced)} أوامر سلاش.")
-    except Exception as e:
-        print(f"⚠️ صار خطأ بتسجيل أوامر السلاش: {e}")
     if not daily_reset_check.is_running():
         daily_reset_check.start()
     if not reminder_check.is_running():
